@@ -1,0 +1,15 @@
+[package]
+name = "state_machine_async"
+version = "0.1.0"
+authors = ["John Children <john.a.children@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-trait = "0.1.10"
+futures-core-preview = "0.3.0-alpha.18"
+futures-util-preview = "0.3.0-alpha.18"
+
+[dev-dependencies]
+futures-test-preview = "0.3.0-alpha.18"
