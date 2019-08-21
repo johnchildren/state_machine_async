@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use futures_core::future::BoxFuture;
 use futures_util::future::FutureExt;
 
+use derive_state_machine_async::StateMachineAsync;
+
 #[derive(Clone)]
 enum Player {
     One,
@@ -16,6 +18,7 @@ enum Turn {
 #[derive(Clone, Debug, PartialEq)]
 struct GameResult;
 
+#[derive(StateMachineAsync)]
 enum Game<'a> {
     Invite {
         invitation: BoxFuture<'a, ()>,
@@ -32,104 +35,34 @@ enum Game<'a> {
     Finished(GameResult),
 }
 
-impl<'a> Game<'a> {
-    async fn start(invitation: BoxFuture<'a, ()>, from: Player, to: Player) -> GameResult {
-        let mut state = Game::Invite {
-            invitation,
-            from,
-            to,
-        };
-
-        loop {
-            match state {
-                Game::Invite {
-                    invitation,
-                    from,
-                    to,
-                } => {
-                    let AfterInvite::WaitingForTurn(WaitingForTurn { turn, active, idle }) =
-                        Game::invite(Invite {
-                            invitation,
-                            from,
-                            to,
-                        })
-                        .await;
-                    state = Game::WaitingForTurn { turn, active, idle };
-                }
-                Game::WaitingForTurn { turn, active, idle } => {
-                    match Game::waiting_for_turn(WaitingForTurn { turn, active, idle }).await {
-                        AfterWaitingForTurn::WaitingForTurn(WaitingForTurn {
-                            turn,
-                            active,
-                            idle,
-                        }) => {
-                            state = Game::WaitingForTurn {
-                                turn,
-                                active: idle,
-                                idle: active,
-                            };
-                        }
-                        AfterWaitingForTurn::Finished(result) => {
-                            state = Game::Finished(result);
-                        }
-                    }
-                }
-                Game::Finished(result) => return result,
-            }
-        }
-    }
-}
-
-struct Invite<'a> {
-    invitation: BoxFuture<'a, ()>,
-    from: Player,
-    to: Player,
-}
-
-struct WaitingForTurn<'a> {
-    turn: BoxFuture<'a, Turn>,
-    active: Player,
-    idle: Player,
-}
-
-enum AfterInvite<'a> {
-    WaitingForTurn(WaitingForTurn<'a>),
-}
-
-enum AfterWaitingForTurn<'a> {
-    WaitingForTurn(WaitingForTurn<'a>),
-    Finished(GameResult),
-}
-
-#[async_trait]
-trait AsyncGame {
-    async fn invite(invite: Invite<'_>) -> AfterInvite<'_>;
-    async fn waiting_for_turn(waiting_for_turn: WaitingForTurn<'_>) -> AfterWaitingForTurn<'_>;
-}
-
 #[async_trait]
 impl<'a> AsyncGame for Game<'a> {
     async fn invite(invite: Invite<'_>) -> AfterInvite<'_> {
         invite.invitation.await;
+
         let turn = (async { Turn::Continue }).boxed();
-        AfterInvite::WaitingForTurn(WaitingForTurn {
+
+        WaitingForTurn {
             turn,
             active: invite.to,
             idle: invite.from,
-        })
+        }
+        .into()
     }
 
     async fn waiting_for_turn(waiting_for_turn: WaitingForTurn<'_>) -> AfterWaitingForTurn<'_> {
         match waiting_for_turn.turn.await {
             Turn::Continue => {
                 let turn = (async { Turn::GameFinished(GameResult) }).boxed();
-                AfterWaitingForTurn::WaitingForTurn(WaitingForTurn {
+
+                WaitingForTurn {
                     turn,
                     active: waiting_for_turn.idle,
                     idle: waiting_for_turn.active,
-                })
+                }
+                .into()
             }
-            Turn::GameFinished(result) => AfterWaitingForTurn::Finished(result),
+            Turn::GameFinished(result) => result.into(),
         }
     }
 }
