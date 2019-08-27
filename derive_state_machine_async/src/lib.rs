@@ -1,12 +1,40 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 
+use heck::SnakeCase;
+use proc_macro2::{Ident, Span};
 use quote::quote;
+use syn::{parse_macro_input, Data, DataEnum, DeriveInput};
 
 #[proc_macro_derive(StateMachineAsync)]
-pub fn derive_state_machine_async(_item: TokenStream) -> TokenStream {
+pub fn derive_state_machine_async(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+
+    let name = input.ident;
+
+    let variants = match input.data {
+        Data::Enum(DataEnum { variants, .. }) => variants,
+        _ => panic!("not an enum"),
+    };
+
+    let states_names: Vec<&syn::Ident> = variants.iter().map(|variant| &variant.ident).collect();
+    let states_names_snake_case: Vec<Ident> = states_names
+        .iter()
+        .map(|ident| ident.to_string().to_snake_case())
+        .map(|snake_case_name| Ident::new(&snake_case_name, Span::call_site()))
+        .collect();
+    let states_after_names: Vec<Ident> = states_names
+        .iter()
+        .map(|ident| format!("After{}", ident.to_string()))
+        .filter(|after_name| after_name != "AfterFinished") // horrible hack pls remove
+        .map(|after_name| Ident::new(&after_name, Span::call_site()))
+        .collect();
+
+    let states_fields: Vec<syn::punctuated::Iter<syn::Field>> =
+        variants.iter().map(|x| x.fields.iter()).collect();
+
     let derived = quote! {
-        impl<'a> Game<'a> {
+        impl<'a> #name<'a> {
             async fn start(invitation: BoxFuture<'a, ()>, from: Player, to: Player) -> GameResult {
                 let mut state = Game::Invite {
                     invitation,
@@ -95,8 +123,9 @@ pub fn derive_state_machine_async(_item: TokenStream) -> TokenStream {
 
         #[async_trait]
         trait AsyncGame {
-            async fn invite(invite: Invite<'_>) -> AfterInvite<'_>;
-            async fn waiting_for_turn(waiting_for_turn: WaitingForTurn<'_>) -> AfterWaitingForTurn<'_>;
+            #(
+            async fn #states_names_snake_case(#states_names_snake_case: #states_names<'_>) -> #states_after_names<'_>;
+            )*
         }
     };
 
