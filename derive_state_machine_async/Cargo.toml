@@ -10,10 +10,9 @@ edition = "2018"
 proc-macro = true
 
 [dependencies]
-async-trait = "0.1.10"
-futures-core-preview = "0.3.0-alpha.18"
-futures-util-preview = "0.3.0-alpha.18"
+darling = "0.10"
+heck = "0.3"
+petgraph = "0.4.13"
 proc-macro2 = "1.0"
 quote = "1.0"
 syn = "1.0"
-heck = "0.3"

@@ -1,21 +1,35 @@
+mod codegen;
+mod derived;
+
 extern crate proc_macro;
 use proc_macro::TokenStream;
 
+use darling::ast;
+use darling::{FromDeriveInput, FromField, FromVariant};
 use heck::SnakeCase;
-use proc_macro2::{Ident, Span};
-use quote::quote;
-use syn::{parse_macro_input, Data, DataEnum, DeriveInput};
+use petgraph::{Direction, Graph};
+use proc_macro2::Span;
+use quote::{format_ident, quote, ToTokens};
+use syn::{parse_macro_input, DeriveInput, Ident};
+
+use derived::{State, StateField, StateMachineAsync};
 
 #[proc_macro_derive(StateMachineAsync)]
 pub fn derive_state_machine_async(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
 
-    let name = input.ident;
+    let sm = StateMachineAsync::from_derive_input(&input).expect("failed to parse input");
+    let name = sm.ident;
+    let generics = sm.generics;
 
-    let variants = match input.data {
-        Data::Enum(DataEnum { variants, .. }) => variants,
+    let variants = match sm.data {
+        ast::Data::Enum(variants) => variants,
         _ => panic!("not an enum"),
     };
+
+    let generic_variants = variants
+        .iter()
+        .map(|variant| codegen::GenericState::from_state(&generics, &variant));
 
     let states_names: Vec<&syn::Ident> = variants.iter().map(|variant| &variant.ident).collect();
     let states_names_snake_case: Vec<Ident> = states_names
@@ -25,14 +39,33 @@ pub fn derive_state_machine_async(item: TokenStream) -> TokenStream {
         .collect();
     let states_after_names: Vec<Ident> = states_names
         .iter()
-        .map(|ident| format!("After{}", ident.to_string()))
+        .map(|ident| format_ident!("After{}", ident))
         .filter(|after_name| after_name != "AfterFinished") // horrible hack pls remove
-        .map(|after_name| Ident::new(&after_name, Span::call_site()))
         .collect();
 
+    let mut states_graph = Graph::<Ident, ()>::new();
+    let invite_node = states_graph.add_node(format_ident!("Invite"));
+    let waiting_for_turn_node = states_graph.add_node(format_ident!("WaitingForTurn"));
+    let finished_node = states_graph.add_node(format_ident!("Finished"));
+    states_graph.add_edge(invite_node, waiting_for_turn_node, ());
+    states_graph.add_edge(waiting_for_turn_node, waiting_for_turn_node, ());
+    states_graph.add_edge(waiting_for_turn_node, finished_node, ());
+
+    let invite_node_transitions = states_graph
+        .neighbors_directed(invite_node, Direction::Outgoing)
+        .map(|x| states_graph.node_weight(x).unwrap().clone())
+        .collect::<Vec<Ident>>();
+
+    let waiting_for_turn_node_transitions = states_graph
+        .neighbors_directed(waiting_for_turn_node, Direction::Outgoing)
+        .map(|x| states_graph.node_weight(x).unwrap().clone())
+        .filter(|name| name != "Finished") // horrible hack pls remove
+        .collect::<Vec<Ident>>();
+
+    /*
     let states_fields: Vec<syn::punctuated::Iter<syn::Field>> =
         variants.iter().map(|x| x.fields.iter()).collect();
-
+    */
     let derived = quote! {
         impl<'a> #name<'a> {
             async fn start(invitation: BoxFuture<'a, ()>, from: Player, to: Player) -> GameResult {
@@ -82,38 +115,38 @@ pub fn derive_state_machine_async(item: TokenStream) -> TokenStream {
             }
         }
 
-        struct Invite<'a> {
-            invitation: BoxFuture<'a, ()>,
-            from: Player,
-            to: Player,
-        }
-
-        struct WaitingForTurn<'a> {
-            turn: BoxFuture<'a, Turn>,
-            active: Player,
-            idle: Player,
-        }
+        #(
+        #generic_variants
+        )*
 
         enum AfterInvite<'a> {
-            WaitingForTurn(WaitingForTurn<'a>),
+            #(
+           #invite_node_transitions(#invite_node_transitions<'a>),
+            )*
         }
 
         enum AfterWaitingForTurn<'a> {
-            WaitingForTurn(WaitingForTurn<'a>),
+            #(
+           #waiting_for_turn_node_transitions(#waiting_for_turn_node_transitions<'a>),
+            )*
             Finished(GameResult),
         }
 
-        impl<'a> From<WaitingForTurn<'a>> for AfterInvite<'a> {
-            fn from(x: WaitingForTurn<'a>) -> AfterInvite<'a> {
-                AfterInvite::WaitingForTurn(x)
+        #(
+        impl<'a> From<#invite_node_transitions<'a>> for AfterInvite<'a> {
+            fn from(x: #invite_node_transitions<'a>) -> AfterInvite<'a> {
+                AfterInvite::#invite_node_transitions(x)
             }
         }
+        )*
 
-        impl<'a> From<WaitingForTurn<'a>> for AfterWaitingForTurn<'a> {
-            fn from(x: WaitingForTurn<'a>) -> AfterWaitingForTurn<'a> {
-                AfterWaitingForTurn::WaitingForTurn(x)
+        #(
+        impl<'a> From<#waiting_for_turn_node_transitions<'a>> for AfterWaitingForTurn<'a> {
+            fn from(x: #waiting_for_turn_node_transitions<'a>) -> AfterWaitingForTurn<'a> {
+                AfterWaitingForTurn::#waiting_for_turn_node_transitions(x)
             }
         }
+        )*
 
         impl<'a> From<GameResult> for AfterWaitingForTurn<'a> {
             fn from(x: GameResult) -> AfterWaitingForTurn<'a> {

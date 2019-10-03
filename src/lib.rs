@@ -86,7 +86,8 @@ mod tests {
 
     use std::task::Poll;
 
-    use futures_test::task::panic_context;
+    use futures_test::future::FutureTestExt;
+    use futures_test::task::{noop_context, panic_context};
     use futures_util::future::FutureExt;
     use futures_util::pin_mut;
 
@@ -96,6 +97,16 @@ mod tests {
         let invite = (async {}).boxed();
         let machine = Game::start(invite, Player::One, Player::Two);
         pin_mut!(machine);
+        assert_eq!(machine.poll_unpin(cx), Poll::Ready(GameResult));
+    }
+
+    #[test]
+    fn pending_once() {
+        let cx = &mut noop_context();
+        let invite = (async {}).pending_once().boxed();
+        let machine = Game::start(invite, Player::One, Player::Two);
+        pin_mut!(machine);
+        assert_eq!(machine.poll_unpin(cx), Poll::Pending);
         assert_eq!(machine.poll_unpin(cx), Poll::Ready(GameResult));
     }
 }
