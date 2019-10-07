@@ -5,14 +5,14 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 
 use darling::ast;
-use darling::{FromDeriveInput, FromField, FromVariant};
+use darling::FromDeriveInput;
 use heck::SnakeCase;
 use petgraph::{Direction, Graph};
 use proc_macro2::Span;
-use quote::{format_ident, quote, ToTokens};
+use quote::{format_ident, quote};
 use syn::{parse_macro_input, DeriveInput, Ident};
 
-use derived::{State, StateField, StateMachineAsync};
+use crate::derived::StateMachineAsync;
 
 #[proc_macro_derive(StateMachineAsync)]
 pub fn derive_state_machine_async(item: TokenStream) -> TokenStream {
@@ -29,7 +29,7 @@ pub fn derive_state_machine_async(item: TokenStream) -> TokenStream {
 
     let generic_variants = variants
         .iter()
-        .map(|variant| codegen::GenericState::from_state(&generics, &variant));
+        .map(|variant| codegen::GenericState::from_state_and_generics(variant, &generics));
 
     let states_names: Vec<&syn::Ident> = variants.iter().map(|variant| &variant.ident).collect();
     let states_names_snake_case: Vec<Ident> = states_names
