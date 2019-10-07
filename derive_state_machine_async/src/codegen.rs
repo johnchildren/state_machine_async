@@ -1,29 +1,37 @@
-use darling::ast;
-use darling::{FromDeriveInput, FromField, FromVariant};
-use heck::SnakeCase;
-use petgraph::{Direction, Graph};
-use proc_macro2::Span;
-use quote::{format_ident, quote, ToTokens};
-use syn::{parse_macro_input, DeriveInput, Ident};
+use darling::usage::{GenericsExt, Purpose, UsesLifetimes, UsesTypeParams};
+use quote::{quote, ToTokens};
+use syn::{GenericParam, Ident, Lifetime, LifetimeDef, TypeParam};
 
 use crate::derived;
 
 pub struct GenericState {
     ident: syn::Ident,
-    generics: syn::Generics,
     fields: Vec<StateField>,
+    lifetimes: Vec<Lifetime>,
+    ty_params: Vec<Ident>,
 }
 
 impl GenericState {
-    pub fn from_state(generics: &syn::Generics, state: &derived::State) -> Self {
+    pub fn from_state_and_generics(
+        state: &derived::State,
+        generics: &syn::Generics,
+    ) -> GenericState {
         Self {
             ident: state.ident.clone(),
-            generics: generics.clone(),
-            fields: state
+            fields: state.fields.fields.iter().map(StateField::from).collect(),
+            lifetimes: state
                 .fields
-                .fields
+                .uses_lifetimes(&Purpose::Declare.into(), &generics.declared_lifetimes())
                 .iter()
-                .map(|sf| StateField::from_state_field(sf))
+                .cloned()
+                .cloned()
+                .collect(),
+            ty_params: state
+                .fields
+                .uses_type_params(&Purpose::Declare.into(), &generics.declared_type_params())
+                .iter()
+                .cloned()
+                .cloned()
                 .collect(),
         }
     }
@@ -32,8 +40,32 @@ impl GenericState {
 impl ToTokens for GenericState {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         let ident = &self.ident;
-        let generics = &self.generics;
         let fields = &self.fields;
+
+        let lifetimes = self
+            .lifetimes
+            .iter()
+            .cloned()
+            .map(LifetimeDef::new)
+            .map(GenericParam::from);
+
+        // both type parameters and lifetimes
+        let generics_params = self
+            .ty_params
+            .iter()
+            .cloned()
+            .map(TypeParam::from)
+            .map(GenericParam::from)
+            .chain(lifetimes)
+            .collect::<syn::punctuated::Punctuated<GenericParam, syn::token::Comma>>();
+
+        let generics = syn::Generics {
+            lt_token: None,
+            params: generics_params,
+            gt_token: None,
+            where_clause: None,
+        };
+
         let state_tokens = quote! {
             struct #ident#generics {
                 #(
@@ -50,9 +82,11 @@ pub struct StateField {
     ty: syn::Type,
 }
 
-impl StateField {
-    fn from_state_field(state_field: &derived::StateField) -> Self {
-        Self {
+impl StateField {}
+
+impl From<&derived::StateField> for StateField {
+    fn from(state_field: &derived::StateField) -> StateField {
+        StateField {
             ident: state_field.ident.clone(),
             ty: state_field.ty.clone(),
         }
